@@ -1,16 +1,38 @@
 # SSH-WS-3XUI
 
-สคริปต์ติดตั้งระบบ **SSH WebSocket** ร่วมกับ **3-X-UI (VLESS & VMess)** บน **Port 80 เดียวกัน** ผ่าน Nginx Reverse Proxy  
+สคริปต์จัดการและติดตั้งระบบ **SSH WebSocket** ร่วมกับ **3-X-UI (VLESS & VMess)** บน **Port 80 เดียวกัน** ผ่าน Nginx Reverse Proxy  
 รองรับแอปพลิเคชันยอดนิยม: **NPV Tunnel (NapsternetV)**, **HTTP Custom**, **HTTP Injector**, **v2rayNG** ฯลฯ
 
 ---
 
-## 🚀 คำสั่งติดตั้งอัตโนมัติ (One-Line Installer)
+## 🚀 คำสั่งติดตั้งและเปิดเมนู (One-Line Installer & Menu)
 
 รันคำสั่งนี้ใน Terminal (สิทธิ์ root):
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/EkromSSH/SSH-WS-3XUI/main/install.sh)
+```
+
+> **ทิป:** หลังจากรันครั้งแรกแล้ว คุณสามารถพิมพ์คำสั่ง `ssh-xui` ใน Terminal เพื่อเปิดเมนูจัดการได้ตลอดเวลา!
+
+---
+
+## 📋 ฟังก์ชันในเมนู (Menu Features)
+
+```text
+====================================================
+      SSH WebSocket + 3-X-UI Manager & Installer    
+           Share Port 80 for SSH & Xray             
+                  By EkromSSH                       
+====================================================
+
+  [1] ติดตั้ง 3-X-UI (v2.8.9)
+  [2] ติดตั้ง SSH WebSocket + Nginx Proxy (Port 80)
+  [3] ติดตั้งทั้งหมด (3-X-UI + SSH WS + Nginx)
+  [4] ตรวจสอบสถานะระบบ (Services Status)
+  [5] รีสตาร์ทเซอร์วิสทั้งหมด (Restart All)
+  [6] ถอนการติดตั้ง SSH WS (Uninstall)
+  [0] ออกจากเมนู (Exit)
 ```
 
 ---
@@ -38,7 +60,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/EkromSSH/SSH-WS-3XUI/main/inst
 
 ## ⚙️ การตั้งค่าในแผงควบคุม 3-X-UI (Web Panel)
 
-หลังจากรันสคริปต์แล้ว ให้เข้าไปที่หน้าเว็บจัดการของ 3-X-UI ไปที่เมนู **Inbounds** $\rightarrow$ กด **+ Add Inbound** จำนวน 2 รายการดังนี้:
+หลังจากติดตั้งแล้ว ให้เข้าไปที่หน้าเว็บจัดการของ 3-X-UI (พอร์ต `2053` หรือพอร์ตที่คุณตั้งไว้) $\rightarrow$ ไปที่เมนู **Inbounds** $\rightarrow$ กด **+ Add Inbound** จำนวน 2 รายการ:
 
 ### 1. Inbound สำหรับ VLESS
 - **Remark**: `VLESS-WS-80`
@@ -86,29 +108,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/EkromSSH/SSH-WS-3XUI/main/inst
 
 ---
 
-## 🛠️ คำสั่งจัดการระบบ (Management Commands)
+## 🛠️ คำสั่งลัด (Shortcut Command)
 
-- **ตรวจสอบสถานะ SSH WebSocket**:
-  ```bash
-  systemctl status ssh-ws
-  ```
-- **รีสตาร์ท SSH WebSocket**:
-  ```bash
-  systemctl restart ssh-ws
-  ```
-- **ตรวจสอบสถานะ Nginx**:
-  ```bash
-  systemctl status nginx
-  ```
-- **รีสตาร์ท Nginx**:
-  ```bash
-  systemctl restart nginx
-  ```
-
----
-
-## 🗑️ การถอนการติดตั้ง (Uninstall)
-
+เมื่อติดตั้งแล้ว สามารถพิมพ์คำสั่งนี้ใน Terminal เพื่อเรียกเมนูจัดการได้ทันที:
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/EkromSSH/SSH-WS-3XUI/main/uninstall.sh)
+ssh-xui
 ```

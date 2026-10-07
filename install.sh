@@ -17,44 +17,57 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-clear
-echo -e "${CYAN}====================================================${NC}"
-echo -e "${GREEN}      SSH WebSocket + 3-X-UI Auto Installer         ${NC}"
-echo -e "${YELLOW}           Share Port 80 for SSH & Xray             ${NC}"
-echo -e "${PURPLE}                  By EkromSSH                       ${NC}"
-echo -e "${CYAN}====================================================${NC}"
-echo ""
-
 # Check Root
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}[ERROR] กรุณารันด้วยสิทธิ์ root (sudo bash)${NC}"
-    exit 1
-fi
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}[ERROR] กรุณารันด้วยสิทธิ์ root (sudo bash)${NC}"
+        exit 1
+    fi
+}
 
-# Check OS (Debian / Ubuntu)
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-else
-    OS=$(uname -s)
-fi
+# Create shortcut command so user can type 'ssh-xui' anytime
+install_shortcut() {
+    cp "$0" /usr/local/bin/ssh-xui 2>/dev/null || true
+    chmod +x /usr/local/bin/ssh-xui 2>/dev/null || true
+    ln -sf /usr/local/bin/ssh-xui /usr/bin/ssh-xui 2>/dev/null || true
+}
 
-if [[ "$OS" != "ubuntu" && "$OS" != "debian" ]]; then
-    echo -e "${YELLOW}[WARN] แนะนำให้ใช้งานบน Ubuntu หรือ Debian${NC}"
-fi
+# Banner
+show_banner() {
+    clear
+    echo -e "${CYAN}====================================================${NC}"
+    echo -e "${GREEN}      SSH WebSocket + 3-X-UI Manager & Installer    ${NC}"
+    echo -e "${YELLOW}           Share Port 80 for SSH & Xray             ${NC}"
+    echo -e "${PURPLE}                  By EkromSSH                       ${NC}"
+    echo -e "${CYAN}====================================================${NC}"
+    echo ""
+}
 
-# 1. Update and install packages
-echo -e "${BLUE}[1/4] กำลังติดตั้ง Nginx, Python3 และเครื่องมือจำเป็น...${NC}"
-apt-get update -y >/dev/null 2>&1
-apt-get install -y nginx python3 curl ufw iptables >/dev/null 2>&1
+# 1. Install 3-X-UI (v2.8.9)
+install_3xui() {
+    check_root
+    echo -e "${GREEN}[*] กำลังดาวน์โหลดและติดตั้ง 3-X-UI เวอร์ชัน v2.8.9...${NC}"
+    echo -e "${YELLOW}คำแนะนำ: แนะนำให้ตั้ง Port สำหรับ Web Panel เป็นพอร์ตอื่น เช่น 2053 (อย่าใช้พอร์ต 80)${NC}"
+    echo ""
+    sleep 2
+    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) v2.8.9
+    echo ""
+    echo -e "${GREEN}[✓] ติดตั้ง 3-X-UI v2.8.9 เรียบร้อยแล้ว!${NC}"
+    read -p "กด Enter เพื่อกลับสู่เมนูหลัก..." temp
+}
 
-# 2. Deploy Python SSH WebSocket Service
-echo -e "${BLUE}[2/4] กำลังสร้างระบบ SSH WebSocket (Backend Port 2082 -> SSH 22)...${NC}"
-cat << 'EOF' > /usr/local/bin/ssh-ws.py
+# 2. Install SSH WebSocket + Nginx Reverse Proxy
+install_ssh_ws() {
+    check_root
+    echo -e "${BLUE}[1/4] กำลังติดตั้ง Nginx, Python3 และเครื่องมือจำเป็น...${NC}"
+    apt-get update -y >/dev/null 2>&1
+    apt-get install -y nginx python3 curl ufw >/dev/null 2>&1
+
+    echo -e "${BLUE}[2/4] กำลังสร้างระบบ SSH WebSocket (Backend Port 2082 -> SSH 22)...${NC}"
+    cat << 'EOF' > /usr/local/bin/ssh-ws.py
 import socket
 import select
 import threading
-import sys
 
 LISTEN_HOST = '127.0.0.1'
 LISTEN_PORT = 2082
@@ -129,10 +142,9 @@ if __name__ == '__main__':
     main()
 EOF
 
-chmod +x /usr/local/bin/ssh-ws.py
+    chmod +x /usr/local/bin/ssh-ws.py
 
-# Create systemd service for SSH WS
-cat << 'EOF' > /etc/systemd/system/ssh-ws.service
+    cat << 'EOF' > /etc/systemd/system/ssh-ws.service
 [Unit]
 Description=SSH WebSocket Service by EkromSSH
 After=network.target
@@ -148,19 +160,16 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable --now ssh-ws >/dev/null 2>&1
-systemctl restart ssh-ws
+    systemctl daemon-reload
+    systemctl enable --now ssh-ws >/dev/null 2>&1
+    systemctl restart ssh-ws
 
-# 3. Configure Nginx Reverse Proxy
-echo -e "${BLUE}[3/4] กำลังตั้งค่า Nginx Reverse Proxy สำหรับพอร์ต 80...${NC}"
+    echo -e "${BLUE}[3/4] กำลังตั้งค่า Nginx Reverse Proxy สำหรับพอร์ต 80...${NC}"
+    if [ -f /etc/nginx/sites-available/default ]; then
+        cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak
+    fi
 
-# Backup old config if exists
-if [ -f /etc/nginx/sites-available/default ]; then
-    cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak
-fi
-
-cat << 'EOF' > /etc/nginx/sites-available/default
+    cat << 'EOF' > /etc/nginx/sites-available/default
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -210,53 +219,165 @@ server {
 }
 EOF
 
-# Ensure symlink in sites-enabled
-ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+    nginx -t >/dev/null 2>&1
+    systemctl enable nginx >/dev/null 2>&1
+    systemctl restart nginx
 
-# Test Nginx and reload
-nginx -t >/dev/null 2>&1
-systemctl enable nginx >/dev/null 2>&1
-systemctl restart nginx
+    echo -e "${BLUE}[4/4] ตรวจสอบ Firewall...${NC}"
+    if command -v ufw >/dev/null 2>&1; then
+        ufw allow 80/tcp >/dev/null 2>&1
+        ufw allow 22/tcp >/dev/null 2>&1
+    fi
 
-# 4. Open Port 80 on Firewall if ufw is active
-echo -e "${BLUE}[4/4] ตรวจสอบ Firewall...${NC}"
-if command -v ufw >/dev/null 2>&1; then
-    ufw allow 80/tcp >/dev/null 2>&1
-    ufw allow 22/tcp >/dev/null 2>&1
-fi
+    # บันทึกคำสั่งลัด 'ssh-xui' ลงเครื่อง
+    install_shortcut
 
-SERVER_IP=$(curl -s4 ifconfig.me || curl -s4 api.ipify.org || echo "IP_SERVER")
+    SERVER_IP=$(curl -s4 ifconfig.me || curl -s4 api.ipify.org || echo "IP_SERVER")
 
-clear
-echo -e "${GREEN}====================================================${NC}"
-echo -e "${GREEN}          การติดตั้งสำเร็จเรียบร้อยแล้ว!             ${NC}"
-echo -e "${GREEN}====================================================${NC}"
-echo ""
-echo -e "${YELLOW}Server IP:${NC} ${SERVER_IP}"
-echo -e "${YELLOW}Main Port:${NC} 80"
-echo ""
-echo -e "${CYAN}----------------------------------------------------${NC}"
-echo -e "${PURPLE}สิ่งที่ต้องตั้งค่าใน 3-X-UI (Web Panel Inbounds):${NC}"
-echo -e "${CYAN}----------------------------------------------------${NC}"
-echo -e "1) ${GREEN}VLESS Inbound:${NC}"
-echo -e "   - Protocol       : vless"
-echo -e "   - Listening IP   : 127.0.0.1"
-echo -e "   - Port           : 10082"
-echo -e "   - Network        : ws"
-echo -e "   - Path           : /vless-ws"
-echo ""
-echo -e "2) ${GREEN}VMess Inbound:${NC}"
-echo -e "   - Protocol       : vmess"
-echo -e "   - Listening IP   : 127.0.0.1"
-echo -e "   - Port           : 10081"
-echo -e "   - Network        : ws"
-echo -e "   - Path           : /vmess-ws"
-echo ""
-echo -e "${CYAN}----------------------------------------------------${NC}"
-echo -e "${PURPLE}การใช้งานใน Client (NPV Tunnel / HTTP Custom):${NC}"
-echo -e "${CYAN}----------------------------------------------------${NC}"
-echo -e "• ${YELLOW}NPV Tunnel (VLESS/VMess):${NC} พอร์ต 80 | Path /vless-ws หรือ /vmess-ws"
-echo -e "• ${YELLOW}NPV Tunnel / HTTP Custom (SSH):${NC} พอร์ต 80 | Payload:"
-echo -e "  ${GREEN}GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]${NC}"
-echo ""
-echo -e "${CYAN}====================================================${NC}"
+    clear
+    echo -e "${GREEN}====================================================${NC}"
+    echo -e "${GREEN}  ติดตั้ง SSH WS + Nginx Proxy พอร์ต 80 สำเร็จ!     ${NC}"
+    echo -e "${GREEN}====================================================${NC}"
+    echo ""
+    echo -e "${YELLOW}Server IP:${NC} ${SERVER_IP}"
+    echo -e "${YELLOW}Main Port:${NC} 80"
+    echo ""
+    echo -e "${CYAN}----------------------------------------------------${NC}"
+    echo -e "${PURPLE}สิ่งที่ต้องตั้งค่าใน 3-X-UI (Inbounds):${NC}"
+    echo -e "${CYAN}----------------------------------------------------${NC}"
+    echo -e "1) ${GREEN}VLESS Inbound:${NC}"
+    echo -e "   - Protocol       : vless"
+    echo -e "   - Listening IP   : 127.0.0.1"
+    echo -e "   - Port           : 10082"
+    echo -e "   - Network        : ws"
+    echo -e "   - Path           : /vless-ws"
+    echo ""
+    echo -e "2) ${GREEN}VMess Inbound:${NC}"
+    echo -e "   - Protocol       : vmess"
+    echo -e "   - Listening IP   : 127.0.0.1"
+    echo -e "   - Port           : 10081"
+    echo -e "   - Network        : ws"
+    echo -e "   - Path           : /vmess-ws"
+    echo ""
+    echo -e "${CYAN}----------------------------------------------------${NC}"
+    echo -e "${PURPLE}การใช้งานใน Client (NPV Tunnel / HTTP Custom):${NC}"
+    echo -e "${CYAN}----------------------------------------------------${NC}"
+    echo -e "• ${YELLOW}NPV Tunnel (VLESS/VMess):${NC} พอร์ต 80 | Path /vless-ws หรือ /vmess-ws"
+    echo -e "• ${YELLOW}NPV Tunnel / HTTP Custom (SSH):${NC} พอร์ต 80 | Payload:"
+    echo -e "  ${GREEN}GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]${NC}"
+    echo ""
+    echo -e "${CYAN}* คุณสามารถพิมพ์คำสั่ง '${YELLOW}ssh-xui${CYAN}' เพื่อเปิดเมนูนี้ได้ตลอดเวลา${NC}"
+    echo ""
+    read -p "กด Enter เพื่อกลับสู่เมนูหลัก..." temp
+}
+
+# 3. Install All (3-X-UI + SSH WS)
+install_all() {
+    check_root
+    echo -e "${GREEN}=== เริ่มต้นติดตั้งทั้ง 3-X-UI และ SSH WS ===${NC}"
+    echo ""
+    # ติดตั้ง 3-x-ui ก่อน
+    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) v2.8.9
+    # ติดตั้ง SSH WS + Nginx ต่อ
+    install_ssh_ws
+}
+
+# 4. Check Status
+check_status() {
+    clear
+    echo -e "${CYAN}====================================================${NC}"
+    echo -e "${GREEN}             ตรวจสอบสถานะการทำงานของระบบ            ${NC}"
+    echo -e "${CYAN}====================================================${NC}"
+    echo ""
+
+    # Status of Nginx
+    if systemctl is-active --quiet nginx; then
+        echo -e "Nginx (Port 80)        : ${GREEN}[ กำลังทำงาน - ACTIVE ]${NC}"
+    else
+        echo -e "Nginx (Port 80)        : ${RED}[ ไม่ทำงาน - INACTIVE ]${NC}"
+    fi
+
+    # Status of SSH WS
+    if systemctl is-active --quiet ssh-ws; then
+        echo -e "SSH WebSocket (WS)     : ${GREEN}[ กำลังทำงาน - ACTIVE ]${NC}"
+    else
+        echo -e "SSH WebSocket (WS)     : ${RED}[ ไม่ทำงาน - INACTIVE ]${NC}"
+    fi
+
+    # Status of 3-X-UI (x-ui)
+    if systemctl is-active --quiet x-ui; then
+        echo -e "3-X-UI (Xray Core)     : ${GREEN}[ กำลังทำงาน - ACTIVE ]${NC}"
+    else
+        echo -e "3-X-UI (Xray Core)     : ${YELLOW}[ ไม่ได้ติดตั้ง หรือ หยุดทำงาน ]${NC}"
+    fi
+
+    echo ""
+    echo -e "${CYAN}----------------------------------------------------${NC}"
+    echo -e "${PURPLE}พอร์ตที่กำลังเปิดใช้งาน (Listening Ports):${NC}"
+    echo -e "${CYAN}----------------------------------------------------${NC}"
+    if command -v ss >/dev/null 2>&1; then
+        ss -tulpn | grep -E ':(80|22|2082|10081|10082|2053|54321)' || echo "ยังไม่พบพอร์ตที่กำหนด"
+    fi
+    echo ""
+    read -p "กด Enter เพื่อกลับสู่เมนูหลัก..." temp
+}
+
+# 5. Restart All Services
+restart_services() {
+    echo -e "${YELLOW}กำลังรีสตาร์ทเซอร์วิสทั้งหมด...${NC}"
+    systemctl restart nginx 2>/dev/null || true
+    systemctl restart ssh-ws 2>/dev/null || true
+    systemctl restart x-ui 2>/dev/null || true
+    echo -e "${GREEN}[✓] รีสตาร์ทเรียบร้อยแล้ว!${NC}"
+    sleep 2
+}
+
+# 6. Uninstall SSH WS
+uninstall_ssh_ws() {
+    check_root
+    echo -e "${YELLOW}กำลังถอนการติดตั้ง SSH WebSocket และคืนค่า Nginx...${NC}"
+    systemctl stop ssh-ws 2>/dev/null || true
+    systemctl disable ssh-ws 2>/dev/null || true
+    rm -f /etc/systemd/system/ssh-ws.service
+    rm -f /usr/local/bin/ssh-ws.py
+    systemctl daemon-reload
+
+    if [ -f /etc/nginx/sites-available/default.bak ]; then
+        cp /etc/nginx/sites-available/default.bak /etc/nginx/sites-available/default
+        systemctl restart nginx 2>/dev/null || true
+    fi
+
+    echo -e "${GREEN}[✓] ถอนการติดตั้งเรียบร้อยแล้ว!${NC}"
+    sleep 2
+}
+
+# Main Menu Loop
+main_menu() {
+    install_shortcut
+    while true; do
+        show_banner
+        echo -e "  ${GREEN}[1]${NC} ติดตั้ง 3-X-UI (v2.8.9)"
+        echo -e "  ${GREEN}[2]${NC} ติดตั้ง SSH WebSocket + Nginx Proxy (Port 80)"
+        echo -e "  ${GREEN}[3]${NC} ติดตั้งทั้งหมด (3-X-UI + SSH WS + Nginx)"
+        echo -e "  ${CYAN}[4]${NC} ตรวจสอบสถานะระบบ (Services Status)"
+        echo -e "  ${YELLOW}[5]${NC} รีสตาร์ทเซอร์วิสทั้งหมด (Restart All)"
+        echo -e "  ${RED}[6]${NC} ถอนการติดตั้ง SSH WS (Uninstall)"
+        echo -e "  ${PURPLE}[0]${NC} ออกจากเมนู (Exit)"
+        echo ""
+        read -p "เลือกเมนู [0-6]: " choice
+        case $choice in
+            1) install_3xui ;;
+            2) install_ssh_ws ;;
+            3) install_all ;;
+            4) check_status ;;
+            5) restart_services ;;
+            6) uninstall_ssh_ws ;;
+            0) echo -e "${GREEN}ขอบคุณที่ใช้งานครับ!${NC}"; exit 0 ;;
+            *) echo -e "${RED}ตัวเลือกไม่ถูกต้อง! กรุณาลองใหม่${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# Run Menu
+main_menu
