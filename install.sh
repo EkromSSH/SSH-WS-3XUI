@@ -141,10 +141,23 @@ EOF
         cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak
     fi
 
-    cat << 'EOF' > /etc/nginx/sites-available/default
+    # หยุด Apache2 หากมีติดตั้งอยู่เพื่อไม่ให้แย่ง Port 80
+    if systemctl is-active --quiet apache2 2>/dev/null; then
+        echo -e "${YELLOW}พบ Apache2 กำลังใช้งานอยู่ ทำการปิด Apache2 เพื่อให้ Nginx ใช้งาน Port 80...${NC}"
+        systemctl stop apache2 >/dev/null 2>&1 || true
+        systemctl disable apache2 >/dev/null 2>&1 || true
+    fi
+
+    # ตรวจสอบว่าระบบรองรับ IPv6 หรือไม่
+    LISTEN_IPV6=""
+    if [ -f /proc/net/if_inet6 ] && [ -s /proc/net/if_inet6 ]; then
+        LISTEN_IPV6="listen [::]:80 default_server;"
+    fi
+
+    cat << EOF > /etc/nginx/sites-available/default
 server {
     listen 80 default_server;
-    listen [::]:80 default_server;
+    ${LISTEN_IPV6}
     server_name _;
 
     # 1. 3-X-UI: VLESS WebSocket
@@ -152,11 +165,11 @@ server {
         proxy_redirect off;
         proxy_pass http://127.0.0.1:10082;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
     }
@@ -166,11 +179,11 @@ server {
         proxy_redirect off;
         proxy_pass http://127.0.0.1:10081;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
     }
@@ -180,11 +193,11 @@ server {
         proxy_redirect off;
         proxy_pass http://127.0.0.1:2082;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
     }
