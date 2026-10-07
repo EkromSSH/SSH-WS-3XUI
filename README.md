@@ -1,7 +1,8 @@
 # SSH-WS-3XUI
 
 สคริปต์จัดการและติดตั้งระบบ **SSH WebSocket** ร่วมกับ **3-X-UI (VLESS & VMess)** บน **Port 80 เดียวกัน** ผ่าน Nginx Reverse Proxy  
-รองรับแอปพลิเคชันยอดนิยม: **NPV Tunnel (NapsternetV)**, **HTTP Custom**, **HTTP Injector**, **v2rayNG** ฯลฯ
+พร้อมระบบ **จำกัด IP (Limit Multi-login)** และ **จำกัดปริมาณเน็ต (Limit Data Quota GB)** สำหรับ SSH  
+รองรับแอปพลิเคชัน: **NPV Tunnel (NapsternetV)**, **HTTP Custom**, **HTTP Injector**, **v2rayNG** ฯลฯ
 
 ---
 
@@ -13,54 +14,85 @@
 bash <(curl -Ls https://raw.githubusercontent.com/EkromSSH/SSH-WS-3XUI/main/install.sh)
 ```
 
-> **ทิป:** หลังจากรันครั้งแรกแล้ว คุณสามารถพิมพ์คำสั่ง `ssh-xui` ใน Terminal เพื่อเปิดเมนูจัดการได้ตลอดเวลา!
+> **ทิป:** หลังจากรันติดตั้งครั้งแรกแล้ว สามารถพิมพ์คำสั่ง `ssh-xui` ใน Terminal เพื่อเรียกเปิดเมนูจัดการได้ตลอดเวลา!
 
 ---
 
-## 📋 ฟังก์ชันในเมนู (Menu Features)
+## 📋 หน้าตาเมนูหลัก (Main Menu)
 
 ```text
 ====================================================
       SSH WebSocket + 3-X-UI Manager & Installer    
            Share Port 80 for SSH & Xray             
+         Limit IP & Quota (GB) Supported            
                   By EkromSSH                       
 ====================================================
 
   [1] ติดตั้ง 3-X-UI (v2.8.9)
-  [2] ติดตั้ง SSH WebSocket + Nginx Proxy (Port 80)
-  [3] ติดตั้งทั้งหมด (3-X-UI + SSH WS + Nginx)
-  [4] ตรวจสอบสถานะระบบ (Services Status)
-  [5] รีสตาร์ทเซอร์วิสทั้งหมด (Restart All)
-  [6] ถอนการติดตั้ง SSH WS (Uninstall)
+  [2] ติดตั้ง SSH WebSocket + Limit IP/GB + Nginx (Port 80)
+  [3] ติดตั้งทั้งหมด (3-X-UI + SSH WS + ระบบ Limit)
+  ----------------------------------------------------
+  [4] จัดการบัญชีผู้ใช้ SSH (สร้าง / ลบ / ต่ออายุ)
+  [5] ดูรายชื่อผู้ใช้ทั้งหมด & ข้อมูล GB / วันหมดอายุ
+  [6] ตรวจสอบผู้ใช้ออนไลน์ & IP (Real-time)
+  ----------------------------------------------------
+  [7] ตรวจสอบสถานะระบบ (Services Status)
+  [8] รีสตาร์ทเซอร์วิสทั้งหมด (Restart All)
+  [9] ถอนการติดตั้ง SSH WS & Limit (Uninstall)
   [0] ออกจากเมนู (Exit)
 ```
 
 ---
 
-## 📌 แผนผังการทำงาน (Architecture)
+## 🛡️ ฟีเจอร์ระบบ Limit IP & Limit GB สำหรับ SSH
 
-```text
-[ Client (NPV Tunnel / HTTP Custom / v2rayNG) ]
-                       │
-                       │ เชื่อมต่อเข้ามาที่ Port 80
-                       ▼
-               [ Nginx Proxy:80 ]
-       ┌───────────────┼───────────────┐
- (Path: /vless-ws) (Path: /vmess-ws) (Path: / หรือ /ssh)
-       │               │               │
-       ▼               ▼               ▼
-[3-X-UI: VLESS] [3-X-UI: VMess] [Python SSH-WS]
-(127.0.0.1:10082) (127.0.0.1:10081) (127.0.0.1:2082)
-                                       │
-                                       ▼
-                                 [SSH Port 22]
-```
+1. **ระบบตรวจจับ Real IP ผ่าน WebSocket (Real-IP Mapping):**
+   - แก้ปัญหาปกติที่ SSH WS จะเห็น IP เป็น `127.0.0.1` ทั้งหมด
+   - สคริปต์จะดึง Real IP จาก HTTP Header ของ Nginx (`X-Real-IP`) ทำให้ระบุ IP จริงของ Client ได้แม่นยำ
+2. **จำกัดจำนวน IP (Limit Multi-Login):**
+   - กำหนดจำนวนเครื่องสูงสุดที่ล็อกอินพร้อมกันได้ต่อ 1 บัญชี (เช่น ลิมิต 1 IP หรือ 2 IP)
+   - หากตรวจพบว่าผู้ใช้เชื่อมต่อเกินจำนวน IP ที่กำหนด ระบบจะตัดเซสชันส่วนเกินออกทันทีแบบอัตโนมัติ
+3. **จำกัดปริมาณข้อมูล (Data Quota Limit GB):**
+   - ใช้ iptables Quota ระดับเคอร์เนล Linux
+   - กำหนดโควต้าเน็ตเป็น GB ได้อย่างแม่นยำ (เช่น 50 GB, 100 GB)
+   - เมื่อใช้งานครบโควต้า ระบบจะตัดการเชื่อมต่อและล็อคบัญชีอัตโนมัติ
+4. **ตรวจสอบวันหมดอายุ (Auto Expiration):**
+   - ตรวจสอบวันหมดอายุแบบ Real-time และล็อคบัญชีที่หมดอายุทันที
+
+---
+
+## ⚙️ คำสั่งจัดการบัญชีผู้ใช้แบบรวดเร็ว (CLI Commands)
+
+นอกจากเปิดผ่านเมนู `ssh-xui` แล้ว คุณยังสามารถใช้คำสั่ง `ssh-user` ได้โดยตรง:
+
+- **สร้างผู้ใช้ใหม่:**
+  ```bash
+  ssh-user create <user> <pass> <days> <gb> <max_ip>
+  # ตัวอย่าง: สร้าง user1 รหัส 1234 อยู่ได้ 30 วัน ลิมิต 50 GB ลิมิต 2 IP
+  ssh-user create user1 1234 30 50 2
+  ```
+- **ลบผู้ใช้:**
+  ```bash
+  ssh-user delete user1
+  ```
+- **ต่ออายุผู้ใช้:**
+  ```bash
+  ssh-user renew user1 30 50 2
+  ```
+- **ดูรายชื่อและปริมาณ GB ที่ใช้ไป:**
+  ```bash
+  ssh-user list
+  ```
+- **ดูผู้ใช้ที่กำลังออนไลน์และ IP จริง:**
+  ```bash
+  ssh-user online
+  ```
 
 ---
 
 ## ⚙️ การตั้งค่าในแผงควบคุม 3-X-UI (Web Panel)
 
-หลังจากติดตั้งแล้ว ให้เข้าไปที่หน้าเว็บจัดการของ 3-X-UI (พอร์ต `2053` หรือพอร์ตที่คุณตั้งไว้) $\rightarrow$ ไปที่เมนู **Inbounds** $\rightarrow$ กด **+ Add Inbound** จำนวน 2 รายการ:
+ไปที่เมนู **Inbounds** $\rightarrow$ กด **+ Add Inbound** จำนวน 2 รายการ:
 
 ### 1. Inbound สำหรับ VLESS
 - **Remark**: `VLESS-WS-80`
@@ -82,35 +114,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/EkromSSH/SSH-WS-3XUI/main/inst
 
 ## 📱 การตั้งค่าใน Client แอปต่างๆ
 
-### 1. NPV Tunnel (NapsternetV)
-- **VLESS / VMess**:
-  - สแกน QR Code หรือนำเข้าลิงก์จาก 3-X-UI
-  - ตรวจสอบ Port เป็น `80`
-  - ตรวจสอบ Network เป็น `WebSocket` และ Path เป็น `/vless-ws` หรือ `/vmess-ws`
-- **SSH WebSocket**:
-  - เลือกประเภทโปรไฟล์เป็น **SSH**
-  - **Host**: IP หรือ โดเมนของเซิร์ฟเวอร์
-  - **Port**: `80`
-  - **WS Path**: `/`
-  - **Payload**:
-    ```http
-    GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]
-    ```
-
-### 2. HTTP Custom / HTTP Injector (สำหรับ SSH)
-- **SSH Host**: IP ของเซิร์ฟเวอร์
-- **SSH Port**: `80`
-- **Username & Password**: บัญชี SSH ของคุณ
-- **Payload**:
+- **NPV Tunnel (VLESS / VMess):** พอร์ต `80` | Path `/vless-ws` หรือ `/vmess-ws`
+- **NPV Tunnel / HTTP Custom (SSH):** พอร์ต `80` | Payload:
   ```http
   GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]
   ```
-
----
-
-## 🛠️ คำสั่งลัด (Shortcut Command)
-
-เมื่อติดตั้งแล้ว สามารถพิมพ์คำสั่งนี้ใน Terminal เพื่อเรียกเมนูจัดการได้ทันที:
-```bash
-ssh-xui
-```

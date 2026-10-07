@@ -16,13 +16,25 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-echo -e "${YELLOW}กำลังถอนการติดตั้ง SSH WebSocket และคืนค่า Nginx...${NC}"
+echo -e "${YELLOW}กำลังถอนการติดตั้ง SSH WebSocket และระบบ Limit...${NC}"
 
-# Stop and disable SSH WS service
+# Stop and disable services
 systemctl stop ssh-ws 2>/dev/null || true
 systemctl disable ssh-ws 2>/dev/null || true
+systemctl stop ssh-limit 2>/dev/null || true
+systemctl disable ssh-limit 2>/dev/null || true
+
+# Remove binaries and services
 rm -f /etc/systemd/system/ssh-ws.service
+rm -f /etc/systemd/system/ssh-limit.service
 rm -f /usr/local/bin/ssh-ws.py
+rm -f /usr/local/bin/ssh-limit.py
+rm -f /usr/local/bin/ssh-user
+rm -f /usr/bin/ssh-user
+rm -f /usr/local/bin/ssh-xui
+rm -f /usr/bin/ssh-xui
+rm -rf /run/ssh-ws-ports
+
 systemctl daemon-reload
 
 # Restore Nginx backup if exists

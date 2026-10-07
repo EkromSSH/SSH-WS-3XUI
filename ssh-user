@@ -1,0 +1,316 @@
+#!/bin/bash
+# =========================================================
+# Project: SSH-WS-3XUI
+# Author: EkromSSH
+# Script: ssh-user
+# Description: CLI User Manager with Quota (GB) & Limit IP
+# =========================================================
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+DB_FILE="/etc/ssh/.ssh.db"
+mkdir -p /etc/ssh
+
+# Color definitions
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+del_quota_rules() {
+    local uid_num="$1"
+    [ -z "$uid_num" ] && return 0
+    local nums
+    nums=$(iptables -L OUTPUT -n --line-numbers 2>/dev/null | grep "owner UID match $uid_num" | awk '{print $1}' | sort -rn)
+    for n in $nums; do
+        iptables -D OUTPUT "$n" 2>/dev/null
+    done
+}
+
+set_quota() {
+    local u="$1" gb="$2"
+    [ -z "$gb" ] && gb=0
+    [ "$gb" -eq 0 ] 2>/dev/null && return 0
+    local uid_num
+    uid_num=$(id -u "$u" 2>/dev/null)
+    [ -z "$uid_num" ] && return 0
+    del_quota_rules "$uid_num"
+    local bytes=$((gb * 1024 * 1024 * 1024))
+    iptables -A OUTPUT -m owner --uid-owner "$uid_num" -m quota --quota "$bytes" -j ACCEPT 2>/dev/null || true
+    iptables -A OUTPUT -m owner --uid-owner "$uid_num" -j REJECT 2>/dev/null || true
+}
+
+# 1. Create User
+user_create() {
+    local user="$1" pass="$2" days="$3" gb="$4" maxip="$5"
+
+    if [ -z "$user" ] || [ -z "$pass" ] || [ -z "$days" ]; then
+        echo -e "${YELLOW}กรุณากรอกข้อมูลการสร้างผู้ใช้:${NC}"
+        read -p "Username     : " user
+        read -p "Password     : " pass
+        read -p "จำนวนวันหมดอายุ : " days
+        read -p "ลิมิต GB (0 = ไม่จำกัด) : " gb
+        read -p "ลิมิต IP (0 = ไม่จำกัด) : " maxip
+    fi
+
+    [ -z "$gb" ] && gb=0
+    [ -z "$maxip" ] && maxip=0
+
+    if id "$user" &>/dev/null; then
+        echo -e "${RED}[ERROR] มีผู้ใช้ '$user' อยู่ในระบบแล้ว!${NC}"
+        return 1
+    fi
+
+    useradd -m -s /bin/sh "$user" 2>/dev/null
+    echo "$user:$pass" | chpasswd 2>/dev/null
+    EXP_TS=$(date -d "+$days days" +%s)
+    chage -E $(date -d "+$days days" +%Y-%m-%d) "$user" 2>/dev/null
+
+    sed -i "/^### $user /d" "$DB_FILE" 2>/dev/null
+    echo "### $user $EXP_TS $gb $maxip" >> "$DB_FILE"
+
+    if [ "$gb" -gt 0 ] 2>/dev/null; then
+        set_quota "$user" "$gb"
+    fi
+
+    echo ""
+    echo -e "${GREEN}==============================================${NC}"
+    echo -e "${GREEN}        สร้างบัญชี SSH สำเร็จเรียบร้อย!        ${NC}"
+    echo -e "${GREEN}==============================================${NC}"
+    echo -e "Username     : ${YELLOW}$user${NC}"
+    echo -e "Password     : ${YELLOW}$pass${NC}"
+    echo -e "วันหมดอายุ   : ${YELLOW}$(date -d "@$EXP_TS" '+%Y-%m-%d %H:%M:%S')${NC}"
+    echo -e "ลิมิต Data   : ${YELLOW}$([ "$gb" -eq 0 ] && echo "ไม่จำกัด" || echo "$gb GB")${NC}"
+    echo -e "ลิมิต Login  : ${YELLOW}$([ "$maxip" -eq 0 ] && echo "ไม่จำกัด" || echo "$maxip IP")${NC}"
+    echo -e "${GREEN}==============================================${NC}"
+}
+
+# 2. Delete User
+user_delete() {
+    local user="$1"
+    if [ -z "$user" ]; then
+        read -p "กรอก Username ที่ต้องการลบ: " user
+    fi
+
+    if ! id "$user" &>/dev/null; then
+        echo -e "${RED}[ERROR] ไม่พบบัญชี '$user' ในระบบ!${NC}"
+        return 1
+    fi
+
+    local uid_num
+    uid_num=$(id -u "$user" 2>/dev/null)
+    if [ -n "$uid_num" ]; then
+        del_quota_rules "$uid_num"
+    fi
+    pkill -u "$user" 2>/dev/null || true
+    userdel -r "$user" 2>/dev/null || true
+    sed -i "/^### $user /d" "$DB_FILE" 2>/dev/null
+
+    echo -e "${GREEN}[✓] ลบบัญชี '$user' เรียบร้อยแล้ว!${NC}"
+}
+
+# 3. Renew User
+user_renew() {
+    local user="$1" days="$2" gb="$3" maxip="$4"
+    if [ -z "$user" ]; then
+        read -p "Username ที่ต้องการต่ออายุ: " user
+        read -p "เพิ่มจำนวนวัน (วัน): " days
+        read -p "ตั้งค่า GB ใหม่ (-1 = ใช้ค่าเดิม): " gb
+        read -p "ตั้งค่า Limit IP ใหม่ (-1 = ใช้ค่าเดิม): " maxip
+    fi
+
+    if ! id "$user" &>/dev/null; then
+        echo -e "${RED}[ERROR] ไม่พบบัญชี '$user' ในระบบ!${NC}"
+        return 1
+    fi
+
+    local old_info
+    old_info=$(grep "^### $user " "$DB_FILE" 2>/dev/null | tail -n1)
+    local old_exp old_gb old_ip
+    old_exp=$(echo "$old_info" | awk '{print $3}')
+    old_gb=$(echo "$old_info" | awk '{print $4}')
+    old_ip=$(echo "$old_info" | awk '{print $5}')
+
+    [ -z "$old_gb" ] && old_gb=0
+    [ -z "$old_ip" ] && old_ip=0
+
+    local new_gb="${gb:-$old_gb}"; [ "$new_gb" = "-1" ] && new_gb="$old_gb"
+    local new_ip="${maxip:-$old_ip}"; [ "$new_ip" = "-1" ] && new_ip="$old_ip"
+
+    local now_ts
+    now_ts=$(date +%s)
+    local exp_ts
+    if [ -n "$old_exp" ] && [ "$old_exp" -gt "$now_ts" ]; then
+        exp_ts=$((old_exp + days * 86400))
+    else
+        exp_ts=$((now_ts + days * 86400))
+    fi
+
+    local exp_date
+    exp_date=$(date -d "@$exp_ts" +%Y-%m-%d)
+    usermod -e "$exp_date" -U "$user" 2>/dev/null
+
+    sed -i "/^### $user /d" "$DB_FILE" 2>/dev/null
+    echo "### $user $exp_ts $new_gb $new_ip" >> "$DB_FILE"
+
+    if [ "$new_gb" -gt 0 ] 2>/dev/null; then
+        set_quota "$user" "$new_gb"
+    else
+        del_quota_rules "$(id -u "$user" 2>/dev/null)"
+    fi
+
+    echo -e "${GREEN}[✓] ต่ออายุบัญชี '$user' สำเร็จ! วันหมดอายุใหม่: $exp_date | Quota: $new_gb GB | Max IP: $new_ip${NC}"
+}
+
+# 4. Unlock User
+user_unlock() {
+    local user="$1"
+    if [ -z "$user" ]; then
+        read -p "กรอก Username ที่ต้องการปลดล็อค: " user
+    fi
+    usermod -U "$user" 2>/dev/null
+    local gb
+    gb=$(grep "^### $user " "$DB_FILE" 2>/dev/null | awk '{print $4}')
+    if [ -n "$gb" ] && [ "$gb" -gt 0 ] 2>/dev/null; then
+        set_quota "$user" "$gb"
+    fi
+    echo -e "${GREEN}[✓] ปลดล็อคบัญชี '$user' เรียบร้อยแล้ว!${NC}"
+}
+
+# 5. List Users
+user_list() {
+    echo -e "${CYAN}========================================================================================${NC}"
+    printf "${GREEN}%-16s | %-12s | %-18s | %-10s | %-12s${NC}\n" "USERNAME" "EXP DATE" "DATA QUOTA" "IP LIMIT" "STATUS"
+    echo -e "${CYAN}========================================================================================${NC}"
+
+    if [ ! -f "$DB_FILE" ] || [ ! -s "$DB_FILE" ]; then
+        echo -e "${YELLOW}  ยังไม่มีข้อมูลบัญชีผู้ใช้ในระบบ${NC}"
+        echo -e "${CYAN}========================================================================================${NC}"
+        return
+    fi
+
+    local now_ts
+    now_ts=$(date +%s)
+
+    while read -r prefix user exp_ts gb maxip; do
+        [ "$prefix" != "###" ] && continue
+        [ -z "$user" ] && continue
+
+        local exp_str="ไม่มีกำหนด"
+        local status_str="${GREEN}ปกติ${NC}"
+
+        if [ -n "$exp_ts" ] && [ "$exp_ts" -gt 0 ] 2>/dev/null; then
+            exp_str=$(date -d "@$exp_ts" +%Y-%m-%d 2>/dev/null || echo "Error")
+            if [ "$now_ts" -gt "$exp_ts" ]; then
+                status_str="${RED}หมดอายุ${NC}"
+            fi
+        fi
+
+        # Get data quota usage
+        local quota_str="ไม่จำกัด"
+        if [ -n "$gb" ] && [ "$gb" -gt 0 ] 2>/dev/null; then
+            local uid_num
+            uid_num=$(id -u "$user" 2>/dev/null)
+            local used_bytes=0
+            if [ -n "$uid_num" ]; then
+                used_bytes=$(iptables -L OUTPUT -v -n -x 2>/dev/null | grep "owner UID match $uid_num" | grep "ACCEPT" | awk '{print $2}' || echo 0)
+                [ -z "$used_bytes" ] && used_bytes=0
+            fi
+            local used_gb
+            used_gb=$(awk "BEGIN {printf \"%.2f\", $used_bytes / 1073741824}")
+            quota_str="${used_gb} / ${gb} GB"
+        fi
+
+        local ip_limit_str="ไม่จำกัด"
+        if [ -n "$maxip" ] && [ "$maxip" -gt 0 ] 2>/dev/null; then
+            ip_limit_str="สูงสุด $maxip IP"
+        fi
+
+        printf "%-16s | %-12s | %-18s | %-10s | %b\n" "$user" "$exp_str" "$quota_str" "$ip_limit_str" "$status_str"
+    done < "$DB_FILE"
+    echo -e "${CYAN}========================================================================================${NC}"
+}
+
+# 6. Online Users
+user_online() {
+    echo -e "${CYAN}========================================================================================${NC}"
+    printf "${GREEN}%-16s | %-18s | %-14s | %-8s | %-10s${NC}\n" "USERNAME" "CLIENT IP" "TYPE" "PID" "STATUS"
+    echo -e "${CYAN}========================================================================================${NC}"
+
+    python3 -c '
+import os, subprocess, re
+
+MAP_DIR = "/run/ssh-ws-ports"
+try:
+    out = subprocess.check_output(["ss", "-tnp", "(", "sport", "=", ":22", ")"], text=True)
+    count = 0
+    for line in out.strip().split("\n"):
+        if "ESTAB" not in line:
+            continue
+        m = re.search(r"users:\(\(\"sshd\",pid=(\d+)", line)
+        if not m:
+            continue
+        pid = int(m.group(1))
+
+        user = None
+        try:
+            with open(f"/proc/{pid}/cmdline", "r") as f:
+                cmd = f.read().replace("\x00", " ")
+            m_user = re.search(r"sshd:\s*([a-zA-Z0-9_\-\.]+)", cmd)
+            if m_user:
+                u = m_user.group(1).split("@")[0]
+                if u not in ["root", "sshd", "nobody", "daemon", "/usr/sbin/sshd"]:
+                    user = u
+        except Exception:
+            pass
+
+        if not user:
+            try:
+                children = subprocess.check_output(["pgrep", "-P", str(pid)], text=True).strip().split()
+                for c in children:
+                    u = subprocess.check_output(["ps", "-o", "user=", "-p", str(c)], text=True).strip()
+                    if u and u not in ["root", "sshd", "nobody", "daemon"]:
+                        user = u
+                        break
+            except Exception:
+                pass
+
+        if not user:
+            continue
+
+        parts = line.split()
+        peer_addr = parts[4]
+        peer_ip, peer_port = peer_addr.rsplit(":", 1) if ":" in peer_addr else (peer_addr, "0")
+
+        conn_type = "Direct SSH"
+        client_ip = peer_ip
+        if peer_ip in ["127.0.0.1", "::1"]:
+            conn_type = "SSH-WS (80)"
+            map_file = os.path.join(MAP_DIR, peer_port)
+            if os.path.exists(map_file):
+                with open(map_file, "r") as mf:
+                    client_ip = mf.read().strip()
+
+        count += 1
+        print(f"{user:<16} | {client_ip:<18} | {conn_type:<14} | {pid:<8} | Online")
+    if count == 0:
+        print("  ไม่มีผู้ใช้ออนไลน์ในขณะนี้")
+except Exception as e:
+    print(f"Error: {e}")
+'
+    echo -e "${CYAN}========================================================================================${NC}"
+}
+
+case "$1" in
+    create)  user_create "$2" "$3" "$4" "$5" "$6" ;;
+    delete)  user_delete "$2" ;;
+    renew)   user_renew "$2" "$3" "$4" "$5" ;;
+    unlock)  user_unlock "$2" ;;
+    list)    user_list ;;
+    online)  user_online ;;
+    *)
+        echo "Usage: ssh-user {create|delete|renew|unlock|list|online}"
+        ;;
+esac

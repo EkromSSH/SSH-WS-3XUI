@@ -3,6 +3,7 @@
 # Project: SSH-WS-3XUI
 # Author: EkromSSH
 # Description: SSH WebSocket + 3-X-UI (VLESS & VMess) Port 80
+# Features: Multi-Protocol, Real-IP tracking, Limit IP & Limit GB
 # Supports: NPV Tunnel, HTTP Custom, HTTP Injector, v2rayNG
 # =========================================================
 
@@ -16,6 +17,8 @@ BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+
+REPO_URL="https://raw.githubusercontent.com/EkromSSH/SSH-WS-3XUI/main"
 
 # Check Root
 check_root() {
@@ -38,7 +41,8 @@ show_banner() {
     echo -e "${CYAN}====================================================${NC}"
     echo -e "${GREEN}      SSH WebSocket + 3-X-UI Manager & Installer    ${NC}"
     echo -e "${YELLOW}           Share Port 80 for SSH & Xray             ${NC}"
-    echo -e "${PURPLE}                  By EkromSSH                       ${NC}"
+    echo -e "${PURPLE}         Limit IP & Quota (GB) Supported            ${NC}"
+    echo -e "${BLUE}                  By EkromSSH                       ${NC}"
     echo -e "${CYAN}====================================================${NC}"
     echo ""
 }
@@ -56,92 +60,21 @@ install_3xui() {
     read -p "กด Enter เพื่อกลับสู่เมนูหลัก..." temp
 }
 
-# 2. Install SSH WebSocket + Nginx Reverse Proxy
+# 2. Install SSH WebSocket + Nginx Reverse Proxy + Limit System
 install_ssh_ws() {
     check_root
-    echo -e "${BLUE}[1/4] กำลังติดตั้ง Nginx, Python3 และเครื่องมือจำเป็น...${NC}"
+    echo -e "${BLUE}[1/5] กำลังติดตั้ง Nginx, Python3, iptables และเครื่องมือจำเป็น...${NC}"
     apt-get update -y >/dev/null 2>&1
-    apt-get install -y nginx python3 curl ufw >/dev/null 2>&1
+    apt-get install -y nginx python3 curl ufw iptables >/dev/null 2>&1
+    mkdir -p /etc/ssh /run/ssh-ws-ports
 
-    echo -e "${BLUE}[2/4] กำลังสร้างระบบ SSH WebSocket (Backend Port 2082 -> SSH 22)...${NC}"
-    cat << 'EOF' > /usr/local/bin/ssh-ws.py
-import socket
-import select
-import threading
-
-LISTEN_HOST = '127.0.0.1'
-LISTEN_PORT = 2082
-SSH_HOST = '127.0.0.1'
-SSH_PORT = 22
-BUFFER_SIZE = 4096
-
-def forward_sockets(sock1, sock2):
-    sockets = [sock1, sock2]
-    try:
-        while True:
-            r, _, _ = select.select(sockets, [], [], 60)
-            if not r:
-                continue
-            for s in r:
-                other = sock2 if s is sock1 else sock1
-                data = s.recv(BUFFER_SIZE)
-                if not data:
-                    return
-                other.sendall(data)
-    except Exception:
-        pass
-    finally:
-        for s in (sock1, sock2):
-            try:
-                s.close()
-            except Exception:
-                pass
-
-def handle_client(client_socket):
-    try:
-        request = client_socket.recv(BUFFER_SIZE)
-        if not request:
-            client_socket.close()
-            return
-
-        req_lower = request.lower()
-        if b"upgrade: websocket" in req_lower or b"http/" in req_lower:
-            response = (
-                b"HTTP/1.1 101 Switching Protocols\r\n"
-                b"Upgrade: websocket\r\n"
-                b"Connection: Upgrade\r\n\r\n"
-            )
-            client_socket.sendall(response)
-
-        ssh_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ssh_socket.connect((SSH_HOST, SSH_PORT))
-        forward_sockets(client_socket, ssh_socket)
-    except Exception:
-        pass
-    finally:
-        try:
-            client_socket.close()
-        except Exception:
-            pass
-
-def main():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((LISTEN_HOST, LISTEN_PORT))
-    server.listen(128)
-    while True:
-        try:
-            client, _ = server.accept()
-            threading.Thread(target=handle_client, args=(client,), daemon=True).start()
-        except KeyboardInterrupt:
-            break
-        except Exception:
-            continue
-
-if __name__ == '__main__':
-    main()
-EOF
-
+    echo -e "${BLUE}[2/5] กำลังสร้างระบบ SSH WebSocket (Backend Port 2082 -> SSH 22)...${NC}"
+    # Download or write ssh-ws.py
+    if [ -f "$(dirname "$0")/ssh-ws.py" ]; then
+        cp "$(dirname "$0")/ssh-ws.py" /usr/local/bin/ssh-ws.py
+    else
+        curl -s -L "${REPO_URL}/ssh-ws.py" -o /usr/local/bin/ssh-ws.py 2>/dev/null || true
+    fi
     chmod +x /usr/local/bin/ssh-ws.py
 
     cat << 'EOF' > /etc/systemd/system/ssh-ws.service
@@ -164,7 +97,46 @@ EOF
     systemctl enable --now ssh-ws >/dev/null 2>&1
     systemctl restart ssh-ws
 
-    echo -e "${BLUE}[3/4] กำลังตั้งค่า Nginx Reverse Proxy สำหรับพอร์ต 80...${NC}"
+    echo -e "${BLUE}[3/5] กำลังติดตั้งระบบ Limit IP และ Limit GB (ssh-limit)...${NC}"
+    # Download or write ssh-limit.py
+    if [ -f "$(dirname "$0")/ssh-limit.py" ]; then
+        cp "$(dirname "$0")/ssh-limit.py" /usr/local/bin/ssh-limit.py
+    else
+        curl -s -L "${REPO_URL}/ssh-limit.py" -o /usr/local/bin/ssh-limit.py 2>/dev/null || true
+    fi
+    chmod +x /usr/local/bin/ssh-limit.py
+
+    # Install ssh-user CLI tool
+    if [ -f "$(dirname "$0")/ssh-user" ]; then
+        cp "$(dirname "$0")/ssh-user" /usr/local/bin/ssh-user
+    else
+        curl -s -L "${REPO_URL}/ssh-user" -o /usr/local/bin/ssh-user 2>/dev/null || true
+    fi
+    chmod +x /usr/local/bin/ssh-user
+    ln -sf /usr/local/bin/ssh-user /usr/bin/ssh-user 2>/dev/null || true
+
+    # Create systemd service for ssh-limit
+    cat << 'EOF' > /etc/systemd/system/ssh-limit.service
+[Unit]
+Description=SSH Limit IP and GB Enforcer by EkromSSH
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/ssh-limit.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now ssh-limit >/dev/null 2>&1
+    systemctl restart ssh-limit
+
+    echo -e "${BLUE}[4/5] กำลังตั้งค่า Nginx Reverse Proxy สำหรับพอร์ต 80...${NC}"
     if [ -f /etc/nginx/sites-available/default ]; then
         cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak
     fi
@@ -224,20 +196,19 @@ EOF
     systemctl enable nginx >/dev/null 2>&1
     systemctl restart nginx
 
-    echo -e "${BLUE}[4/4] ตรวจสอบ Firewall...${NC}"
+    echo -e "${BLUE}[5/5] ตรวจสอบ Firewall...${NC}"
     if command -v ufw >/dev/null 2>&1; then
         ufw allow 80/tcp >/dev/null 2>&1
         ufw allow 22/tcp >/dev/null 2>&1
     fi
 
-    # บันทึกคำสั่งลัด 'ssh-xui' ลงเครื่อง
     install_shortcut
 
     SERVER_IP=$(curl -s4 ifconfig.me || curl -s4 api.ipify.org || echo "IP_SERVER")
 
     clear
     echo -e "${GREEN}====================================================${NC}"
-    echo -e "${GREEN}  ติดตั้ง SSH WS + Nginx Proxy พอร์ต 80 สำเร็จ!     ${NC}"
+    echo -e "${GREEN}  ติดตั้ง SSH WS + Limit IP/GB + Nginx สำเร็จ!       ${NC}"
     echo -e "${GREEN}====================================================${NC}"
     echo ""
     echo -e "${YELLOW}Server IP:${NC} ${SERVER_IP}"
@@ -267,19 +238,17 @@ EOF
     echo -e "• ${YELLOW}NPV Tunnel / HTTP Custom (SSH):${NC} พอร์ต 80 | Payload:"
     echo -e "  ${GREEN}GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]${NC}"
     echo ""
-    echo -e "${CYAN}* คุณสามารถพิมพ์คำสั่ง '${YELLOW}ssh-xui${CYAN}' เพื่อเปิดเมนูนี้ได้ตลอดเวลา${NC}"
+    echo -e "${CYAN}* คุณสามารถพิมพ์คำสั่ง '${YELLOW}ssh-xui${CYAN}' เพื่อเปิดเมนูจัดการได้ตลอดเวลา${NC}"
     echo ""
     read -p "กด Enter เพื่อกลับสู่เมนูหลัก..." temp
 }
 
-# 3. Install All (3-X-UI + SSH WS)
+# 3. Install All (3-X-UI + SSH WS + Limit System)
 install_all() {
     check_root
-    echo -e "${GREEN}=== เริ่มต้นติดตั้งทั้ง 3-X-UI และ SSH WS ===${NC}"
+    echo -e "${GREEN}=== เริ่มต้นติดตั้งทั้ง 3-X-UI และ SSH WS + Limit System ===${NC}"
     echo ""
-    # ติดตั้ง 3-x-ui ก่อน
     bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) v2.8.9
-    # ติดตั้ง SSH WS + Nginx ต่อ
     install_ssh_ws
 }
 
@@ -293,9 +262,9 @@ check_status() {
 
     # Status of Nginx
     if systemctl is-active --quiet nginx; then
-        echo -e "Nginx (Port 80)        : ${GREEN}[ กำลังทำงาน - ACTIVE ]${NC}"
+        echo -e "Nginx (Port 80 Proxy)  : ${GREEN}[ กำลังทำงาน - ACTIVE ]${NC}"
     else
-        echo -e "Nginx (Port 80)        : ${RED}[ ไม่ทำงาน - INACTIVE ]${NC}"
+        echo -e "Nginx (Port 80 Proxy)  : ${RED}[ ไม่ทำงาน - INACTIVE ]${NC}"
     fi
 
     # Status of SSH WS
@@ -303,6 +272,13 @@ check_status() {
         echo -e "SSH WebSocket (WS)     : ${GREEN}[ กำลังทำงาน - ACTIVE ]${NC}"
     else
         echo -e "SSH WebSocket (WS)     : ${RED}[ ไม่ทำงาน - INACTIVE ]${NC}"
+    fi
+
+    # Status of SSH Limit
+    if systemctl is-active --quiet ssh-limit; then
+        echo -e "SSH Limit Daemon (IP/GB): ${GREEN}[ กำลังทำงาน - ACTIVE ]${NC}"
+    else
+        echo -e "SSH Limit Daemon (IP/GB): ${RED}[ ไม่ทำงาน - INACTIVE ]${NC}"
     fi
 
     # Status of 3-X-UI (x-ui)
@@ -328,19 +304,25 @@ restart_services() {
     echo -e "${YELLOW}กำลังรีสตาร์ทเซอร์วิสทั้งหมด...${NC}"
     systemctl restart nginx 2>/dev/null || true
     systemctl restart ssh-ws 2>/dev/null || true
+    systemctl restart ssh-limit 2>/dev/null || true
     systemctl restart x-ui 2>/dev/null || true
     echo -e "${GREEN}[✓] รีสตาร์ทเรียบร้อยแล้ว!${NC}"
     sleep 2
 }
 
-# 6. Uninstall SSH WS
+# 6. Uninstall SSH WS & Limit
 uninstall_ssh_ws() {
     check_root
-    echo -e "${YELLOW}กำลังถอนการติดตั้ง SSH WebSocket และคืนค่า Nginx...${NC}"
+    echo -e "${YELLOW}กำลังถอนการติดตั้ง SSH WebSocket และระบบ Limit...${NC}"
     systemctl stop ssh-ws 2>/dev/null || true
     systemctl disable ssh-ws 2>/dev/null || true
+    systemctl stop ssh-limit 2>/dev/null || true
+    systemctl disable ssh-limit 2>/dev/null || true
     rm -f /etc/systemd/system/ssh-ws.service
+    rm -f /etc/systemd/system/ssh-limit.service
     rm -f /usr/local/bin/ssh-ws.py
+    rm -f /usr/local/bin/ssh-limit.py
+    rm -f /usr/local/bin/ssh-user
     systemctl daemon-reload
 
     if [ -f /etc/nginx/sites-available/default.bak ]; then
@@ -352,27 +334,64 @@ uninstall_ssh_ws() {
     sleep 2
 }
 
+# User Management Wrapper
+user_manager() {
+    while true; do
+        clear
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "${GREEN}             จัดการบัญชีผู้ใช้ SSH (User Admin)       ${NC}"
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "  ${GREEN}[1]${NC} สร้างบัญชี SSH (กำหนด วัน / GB / Limit IP)"
+        echo -e "  ${RED}[2]${NC} ลบบัญชี SSH"
+        echo -e "  ${YELLOW}[3]${NC} ต่ออายุบัญชี SSH (วัน / GB / Limit IP)"
+        echo -e "  ${CYAN}[4]${NC} ปลดล็อคบัญชี SSH"
+        echo -e "  ${PURPLE}[5]${NC} ดูรายชื่อผู้ใช้ทั้งหมด (List Users)"
+        echo -e "  ${BLUE}[6]${NC} ตรวจสอบผู้ใช้ออนไลน์ (Online Real-time)"
+        echo -e "  ${NC}[0]${NC} กลับสู่เมนูหลัก"
+        echo ""
+        read -p "เลือกเมนู [0-6]: " uchoice
+        case $uchoice in
+            1) /usr/local/bin/ssh-user create; read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            2) /usr/local/bin/ssh-user delete; read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            3) /usr/local/bin/ssh-user renew;  read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            4) /usr/local/bin/ssh-user unlock; read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            5) /usr/local/bin/ssh-user list;   read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            6) /usr/local/bin/ssh-user online; read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            0) break ;;
+            *) echo -e "${RED}ตัวเลือกไม่ถูกต้อง!${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
 # Main Menu Loop
 main_menu() {
     install_shortcut
     while true; do
         show_banner
         echo -e "  ${GREEN}[1]${NC} ติดตั้ง 3-X-UI (v2.8.9)"
-        echo -e "  ${GREEN}[2]${NC} ติดตั้ง SSH WebSocket + Nginx Proxy (Port 80)"
-        echo -e "  ${GREEN}[3]${NC} ติดตั้งทั้งหมด (3-X-UI + SSH WS + Nginx)"
-        echo -e "  ${CYAN}[4]${NC} ตรวจสอบสถานะระบบ (Services Status)"
-        echo -e "  ${YELLOW}[5]${NC} รีสตาร์ทเซอร์วิสทั้งหมด (Restart All)"
-        echo -e "  ${RED}[6]${NC} ถอนการติดตั้ง SSH WS (Uninstall)"
-        echo -e "  ${PURPLE}[0]${NC} ออกจากเมนู (Exit)"
+        echo -e "  ${GREEN}[2]${NC} ติดตั้ง SSH WebSocket + Limit IP/GB + Nginx (Port 80)"
+        echo -e "  ${GREEN}[3]${NC} ติดตั้งทั้งหมด (3-X-UI + SSH WS + ระบบ Limit)"
+        echo -e "  ${CYAN}----------------------------------------------------${NC}"
+        echo -e "  ${YELLOW}[4]${NC} จัดการบัญชีผู้ใช้ SSH (สร้าง / ลบ / ต่ออายุ)"
+        echo -e "  ${YELLOW}[5]${NC} ดูรายชื่อผู้ใช้ทั้งหมด & ข้อมูล GB / วันหมดอายุ"
+        echo -e "  ${YELLOW}[6]${NC} ตรวจสอบผู้ใช้ออนไลน์ & IP (Real-time)"
+        echo -e "  ${CYAN}----------------------------------------------------${NC}"
+        echo -e "  ${CYAN}[7]${NC} ตรวจสอบสถานะระบบ (Services Status)"
+        echo -e "  ${PURPLE}[8]${NC} รีสตาร์ทเซอร์วิสทั้งหมด (Restart All)"
+        echo -e "  ${RED}[9]${NC} ถอนการติดตั้ง SSH WS & Limit (Uninstall)"
+        echo -e "  ${NC}[0]${NC} ออกจากเมนู (Exit)"
         echo ""
-        read -p "เลือกเมนู [0-6]: " choice
+        read -p "เลือกเมนู [0-9]: " choice
         case $choice in
             1) install_3xui ;;
             2) install_ssh_ws ;;
             3) install_all ;;
-            4) check_status ;;
-            5) restart_services ;;
-            6) uninstall_ssh_ws ;;
+            4) user_manager ;;
+            5) /usr/local/bin/ssh-user list 2>/dev/null || echo "กรุณาติดตั้งก่อน"; read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            6) /usr/local/bin/ssh-user online 2>/dev/null || echo "กรุณาติดตั้งก่อน"; read -p "กด Enter เพื่อดำเนินการต่อ..." temp ;;
+            7) check_status ;;
+            8) restart_services ;;
+            9) uninstall_ssh_ws ;;
             0) echo -e "${GREEN}ขอบคุณที่ใช้งานครับ!${NC}"; exit 0 ;;
             *) echo -e "${RED}ตัวเลือกไม่ถูกต้อง! กรุณาลองใหม่${NC}"; sleep 1 ;;
         esac
